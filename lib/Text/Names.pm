@@ -17,6 +17,7 @@ our %EXPORT_TAGS = ( 'all' => [ qw(
 	@NAME_PREFIXES 
     abbreviationOf 
     reverseName 
+    normalizeSuffixName
     cleanParseName 
     parseName 
     parseName2 
@@ -662,6 +663,7 @@ my $MERE_SEMI = '(?:\s*(?:;|<br>|<p>|<\/p>)\s*)';
 my $SEMI_AND = "(?:$MERE_SEMI|$AND)";
 my $COMMA_AND = "(?:$MERE_COMMA$AND|$AND|$MERE_COMMA)";
 my $SPACE = '(?:\s|\&nbsp;|\n|\r)';
+my $NAME_SUFFIX = '(?:Jr\.?)';
 my @NAME_PREFIXES_RE;
 for (my $i=0; $i<=$#NAME_PREFIXES; $i++) {
     $NAME_PREFIXES_RE[$i] = '(?:$|^|\W)' . $NAME_PREFIXES[$i] . '(?:$|^|\W)';
@@ -807,8 +809,18 @@ sub prepareCommonNames {
 sub reverseName {
     my $n = shift();
     return undef unless defined($n);
-    my @n = split(/,\s*/,$n);
-    return "$n[1] $n[0]";
+    my ($f,$i,$l,$s) = parseName2($n);
+    my $given = join(" ", grep { defined($_) && length($_) } ($f, $i));
+    my $last = $l // '';
+    $last =~ s/^\s+|\s+$//g;
+    if (defined($s) && length($s)) {
+        $s =~ s/^\s+|\s+$//g;
+        $last .= " $s";
+    }
+    my $out = join(" ", grep { defined($_) && length($_) } ($given, $last));
+    $out =~ s/\s+/ /g;
+    $out =~ s/^\s+|\s+$//g;
+    return $out;
 }
 
 sub composeName {
@@ -816,6 +828,185 @@ sub composeName {
     my $r = $last;
     $r .= ", $given" if $given;
     return $r;
+}
+
+sub _normalize_suffix_token {
+    my $suffix = shift;
+    return '' unless defined $suffix;
+    $suffix =~ s/^\s+|\s+$//g;
+    $suffix =~ s/\.$//;
+    return 'Jr' if lc($suffix) eq 'jr';
+    return $suffix;
+}
+
+sub _trim_name_part {
+    my $part = shift;
+    return '' unless defined $part;
+    $part =~ s/\s+/ /g;
+    $part =~ s/^\s+|\s+$//g;
+    return $part;
+}
+
+sub _compose_suffix_name {
+    my ($last, $suffix, $given) = @_;
+    $last = _trim_name_part($last);
+    $given = _trim_name_part($given);
+    $suffix = _normalize_suffix_token($suffix);
+    return "$last $suffix, $given";
+}
+
+sub _has_multiple_name_tokens {
+    my $part = _trim_name_part(shift);
+    my @tokens = split(/\s+/, $part);
+    return scalar(@tokens) > 1;
+}
+
+sub _normalize_suffix_comma_sequence {
+    my $name_list = shift;
+    my @tokens = map { _trim_name_part($_) } split(/\s*,\s*/, $name_list);
+    return $name_list if @tokens < 2;
+
+    my @out;
+    for (my $i = 0; $i <= $#tokens; $i++) {
+        my $token = $tokens[$i];
+        next unless length $token;
+
+        if ($token =~ /^$NAME_SUFFIX$/i) {
+            my $suffix = _normalize_suffix_token($token);
+            if (@out && _has_multiple_name_tokens($out[-1])) {
+                $out[-1] = _trim_name_part("$out[-1] $suffix");
+                next;
+            }
+            if (@out && $i < $#tokens) {
+                my $last = pop @out;
+                push @out, _trim_name_part("$last $suffix");
+                push @out, $tokens[++$i];
+                next;
+            }
+            if (@out >= 2) {
+                my $given = pop @out;
+                my $last = pop @out;
+                push @out, _trim_name_part("$last $suffix");
+                push @out, $given;
+                next;
+            }
+        }
+
+        push @out, $token;
+    }
+
+    return join(", ", @out);
+}
+
+sub _compose_reversed_trailing_suffix_for_list {
+    my ($prefix, $last, $given, $suffix) = @_;
+    $last = _trim_name_part($last);
+    $given = _trim_name_part($given);
+    $suffix = _normalize_suffix_token($suffix);
+    if (_has_multiple_name_tokens($last) && _has_multiple_name_tokens($given)) {
+        return "$prefix$last, $given, $suffix";
+    }
+    return $prefix . _compose_suffix_name($last, $suffix, $given);
+}
+
+sub _parse_suffix_name {
+    my $in = normalizeSuffixName(shift);
+    return undef unless defined $in;
+
+    if ($in =~ /^\s*([^,]+?)\s+($NAME_SUFFIX)\s*,\s*(.+?)\s*$/i) {
+        my ($last, $suffix, $given) = ($1, $2, $3);
+        return [ _trim_name_part($given), _trim_name_part($last . ' ' . _normalize_suffix_token($suffix)) ];
+    }
+
+    if ($in =~ /^\s*(.+?)\s*,\s*($NAME_SUFFIX)\s*$/i || $in =~ /^\s*(.+?)\s+($NAME_SUFFIX)\s*$/i) {
+        my ($base, $suffix) = ($1, _normalize_suffix_token($2));
+        return undef if $base =~ /,/;
+
+        my ($given, $last) = parseName($base);
+        ($given, $last) = _repair_natural_given_last($given, $last);
+        return [ _trim_name_part($given), _trim_name_part("$last $suffix") ]
+            if defined($given) && defined($last) && $given =~ /\S/ && $last =~ /\S/;
+    }
+
+    return undef;
+}
+
+sub normalizeSuffixName {
+    my $name = shift;
+    return undef unless defined $name;
+
+    my $n = $name;
+    $n =~ s/^\s+|\s+$//g;
+    return $n unless length $n;
+
+    # Lastname, Jr., Given -> Lastname Jr, Given
+    if ($n =~ /^\s*([^,]+?)\s*,\s*($NAME_SUFFIX)\s*,\s*(.+?)\s*$/i) {
+        my ($last, $suffix, $given) = ($1, $2, $3);
+        return _compose_suffix_name($last, $suffix, $given);
+    }
+
+    # Lastname, Given, Jr. -> Lastname Jr, Given
+    if ($n =~ /^\s*([^,]+?)\s*,\s*(.+?)\s*,\s*($NAME_SUFFIX)\s*$/i) {
+        my ($last, $given, $suffix) = ($1, $2, $3);
+        return _compose_suffix_name($last, $suffix, $given);
+    }
+
+    # Lastname Jr., Given -> Lastname Jr, Given
+    if ($n =~ /^\s*([^,]+?)\s+($NAME_SUFFIX)\s*,\s*(.+?)\s*$/i) {
+        my ($last, $suffix, $given) = ($1, $2, $3);
+        return _compose_suffix_name($last, $suffix, $given);
+    }
+
+    return $n;
+}
+
+sub _normalize_suffix_name_list {
+    my $name_list = shift;
+    return undef unless defined $name_list;
+
+    my $n = $name_list;
+    my $and_word = '(?:and|&|&amp;|with)';
+    my $name_start = "(?:^|;\\s*|\\s+$and_word\\s+)";
+
+    # Lastname, Given, Jr. -> Lastname Jr, Given
+    $n =~ s/($name_start)([^,;]+?)\s*,\s*([^,;]+?)\s*,\s*($NAME_SUFFIX)\s*(?=,|\s+$and_word\s+|;|$)/_compose_reversed_trailing_suffix_for_list($1, $2, $3, $4)/gie;
+
+    # Lastname, Jr., Given -> Lastname Jr, Given
+    $n =~ s/($name_start)([^,;]+?)\s*,\s*($NAME_SUFFIX)\s*,\s*/$1 . _compose_suffix_name($2, $3, '')/gie;
+
+    # Firstname Lastname, Jr. and Next Author -> Firstname Lastname Jr and Next Author
+    $n =~ s/($name_start)([^,;]+?)\s*,\s*($NAME_SUFFIX)\s*(?=,|\s+$and_word\s+|;|$)/$1 . _trim_name_part($2) . " " . _normalize_suffix_token($3)/gie;
+
+    $n = _normalize_suffix_comma_sequence($n) unless $n =~ /$AND|;/i;
+
+    return $n;
+}
+
+# parseName() can treat a single-letter middle initial as part of the surname
+# when that initial matches a surname-prefix token (e.g. "E.").
+# For natural-order names with trailing suffixes ("Firstname M. Lastname, Jr."),
+# move those leading initials back to the given-name side.
+sub _repair_natural_given_last {
+    my ($given, $last) = @_;
+    return ($given, $last) unless defined $given && defined $last;
+
+    if ($last =~ /^\s*((?:[A-Z]\.\s*)+)(\S.*)$/) {
+        my ($initials, $rest_last) = ($1, $2);
+        $initials =~ s/\s+/ /g;
+        $initials =~ s/^\s+|\s+$//g;
+        $given =~ s/^\s+|\s+$//g;
+        my $given_cmp = $given;
+        $given_cmp =~ s/\s+/ /g;
+        unless ($given_cmp =~ /\Q$initials\E\s*$/) {
+            $given = length($given) ? "$given $initials" : $initials;
+            $last = $rest_last;
+            $given =~ s/\s+/ /g;
+            $given =~ s/^\s+|\s+$//g;
+            $last =~ s/^\s+|\s+$//g;
+        }
+    }
+
+    return ($given, $last);
 }
 
 
@@ -853,6 +1044,11 @@ sub parseName {
 
     return undef unless defined $in;
  	#print "-->parseName in: $in\n";
+
+    if (my $suffix_parts = _parse_suffix_name($in)) {
+        return @$suffix_parts;
+    }
+    $in = normalizeSuffixName($in);
     
     $in =~ s/^\s*and\s+//; 
     my $jr = ($in =~ s/,?\sJr\.?(\s|$)//i);
@@ -937,6 +1133,8 @@ sub parseNames {
     $in =~ s/^\s*[bB]y(\W)/$1/; #remove "By ";
     $in =~ s/,?\s*et\.? al\.?\s*$//; # et al
     $in =~ s/^\W+//;
+
+    $in = _normalize_suffix_name_list($in);
 
     #print "== $in\n";
     # semi-colon separated
@@ -1074,12 +1272,27 @@ sub parseName2 {
     my $in = shift;
     my ($i,$s);
     return ("","") unless defined $in;
-    my ($l,$f) = split(/,\s*/,$in);
+    if (my $suffix_parts = _parse_suffix_name($in)) {
+        $in = composeName(@$suffix_parts);
+    } else {
+        $in = normalizeSuffixName($in);
+    }
+
+    my ($l, $f);
+    my @parts = split(/,\s*/, $in);
+    if (@parts >= 2) {
+        $l = shift @parts;
+        $f = join(' ', @parts);
+    } else {
+        $l = $parts[0];
+        $f = '';
+    }
     $f ||= '';
     $l ||= '';
     # get suffix
-    if ($l =~ s/\s+(Jr\.?|[IV]{2,10})\s*$//) {
+    if ($l =~ s/\s+($NAME_SUFFIX)\s*$//i) {
         $s = $1;
+        $s = _normalize_suffix_token($s);
     }
     #print "f: $f\nl:$l\n";
     # separate firstname/initial
@@ -1267,14 +1480,29 @@ sub cleanName {
     # Fix for O'Something => O.'Something
     #$n =~ s/O\.'/O'/;
 
-    $n =~ s/[\r\n]/ /gsm;
-    $n =~ s/(\w)\s*,/$1,/g;
+	$n =~ s/[\r\n]/ /gsm;
+	$n =~ s/(\w)\s*,/$1,/g;
+    my $trailing_suffix;
+    if ($n !~ /,/ and $n =~ s/\s+($NAME_SUFFIX)\s*$//i) {
+        $trailing_suffix = _normalize_suffix_token($1);
+    }
 	$n =~ s/([a-z]{2,})\./$1/gi; #remove unwanted .
 	$n =~ s/(\W|\.|\s)([A-Z])(\s|$)/$1$2.$3/g; #add . to initials
 	$n =~ s/(\W|\.|\s)([A-Z])(\s|$)/$1$2.$3/g; #add . to initials (repeat for overlaps)
 	$n =~ s/\.\s*([A-Z])/". " . uc $1/ieg; # adjust spacing between initials
 	$n =~ s/\W*\d{4,4}\W*//g; # misplaced dates
 	$n =~ s/\(.*$//; #parentheses
+    $n = _trim_name_part("$n $trailing_suffix") if defined $trailing_suffix and length $trailing_suffix and $n !~ /,/;
+	$n = normalizeSuffixName($n);
+    if (my $suffix_parts = _parse_suffix_name($n)) {
+        $n = composeName(@$suffix_parts);
+    }
+	# no-comma variant, e.g. "Lastname Jr Firstname"
+	if ($n !~ /,/) {
+		# malformed variant seen in some feeds, e.g. "Jr. Henry E. Kyburg"
+		$n =~ s/^\s*($NAME_SUFFIX)\s+(.+?)\s*$/$2 . " " . _normalize_suffix_token($1)/ie;
+		$n =~ s/^\s*(.+?)\s+($NAME_SUFFIX)\s+(.+?)\s*$/_compose_suffix_name($1, $2, $3)/ie;
+	}
 	# misplaced jr
 	$n =~ s/([\w'-])\s*,(.*)\sJr(\s.*|$)/$1 Jr,$2 $3/i;
 	# misplaced prefixe
@@ -1327,8 +1555,6 @@ sub cleanName {
     } else {
         $n = composeName($f,$l);
     }
-
-
     #warn "** $l, $f";
     #warn "$l, $f";
     # now final capitalization
@@ -8113,7 +8339,7 @@ Takes a name in one of the multiple formats that one can write a name in, and re
 
 =head2 parseName2(string name): array
 
-Use on already-normalized names to split them into four parts: full given names, initials, last names, and suffix. The only 'suffix' recognied is 'Jr'.
+Use on already-normalized names to split them into four parts: full given names, initials, last names, and suffix. The only 'suffix' recognized is 'Jr'.
 
 =head2 parseNameList(array names): array
 

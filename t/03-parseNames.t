@@ -1,4 +1,4 @@
-use Text::Names 'parseNames','cleanName','composeName','parseName','cleanParseName';
+use Text::Names 'parseNames','cleanName','composeName','parseName','parseName2','cleanParseName','reverseName','normalizeSuffixName';
 use Test::More;
 use utf8;
 binmode(STDOUT,":utf8");
@@ -13,6 +13,41 @@ is($n[1], "Nagel", 'Nagel last name');
 is($n[0], "T.", 'Nagel first name');
 my ($f,$l) = parseName("D’Arms, D.");
 is($l,"D’Arms");
+is(normalizeSuffixName("Krotoszynski, Jr., Ronald J."), "Krotoszynski Jr, Ronald J.");
+is(normalizeSuffixName("Hill, Jr., Thomas E."), "Hill Jr, Thomas E.");
+is(normalizeSuffixName("Smith, John, Jr."), "Smith Jr, John");
+is(normalizeSuffixName("Henry E. Kyburg, Jr."), "Henry E. Kyburg, Jr.");
+my ($f2,$l2) = parseName("Krotoszynski, Jr., Ronald J.");
+is($f2,"Ronald J.");
+is($l2,"Krotoszynski Jr");
+my ($f3,$l3) = parseName("Krotoszynski Jr, Ronald J.");
+is($f3,"Ronald J.");
+is($l3,"Krotoszynski Jr");
+my ($f4,$l4) = parseName("Thomas E. Hill, Jr.");
+is($f4,"Thomas E.");
+is($l4,"Hill Jr");
+my ($f5,$l5) = parseName("Henry E. Kyburg Jr.");
+is($f5,"Henry E.");
+is($l5,"Kyburg Jr");
+my ($pf,$pi,$pl,$ps) = parseName2("Krotoszynski, Jr., Ronald J.");
+is($pf,"Ronald");
+is($pi,"J.");
+is($pl,"Krotoszynski");
+is($ps,"Jr");
+my ($pf2,$pi2,$pl2,$ps2) = parseName2("Thomas E. Hill, Jr.");
+is($pf2,"Thomas");
+is($pi2,"E.");
+is($pl2,"Hill");
+is($ps2,"Jr");
+my ($pf3,$pi3,$pl3,$ps3) = parseName2("Smith, John, Jr.");
+is($pf3,"John");
+is($pi3,undef);
+is($pl3,"Smith");
+is($ps3,"Jr");
+is(reverseName("Krotoszynski Jr, Ronald J."),"Ronald J. Krotoszynski Jr");
+is(reverseName("Krotoszynski, Jr., Ronald J."),"Ronald J. Krotoszynski Jr");
+is(reverseName("Thomas E. Hill, Jr."),"Thomas E. Hill Jr");
+is(reverseName("Smith, John, Jr."),"John Smith Jr");
 
 
 my %tests = (
@@ -33,6 +68,15 @@ my %tests = (
 	'DAVID BOURGET' => 'BOURGET, DAVID',
     'John Doe Jr' => 'Doe Jr, John',
     'John M. Doe Jr' => 'Doe Jr, John M.',
+    'Smith, John, Jr.' => 'Smith Jr, John',
+    'John Smith, Jr. and Jane Roe' => 'Smith Jr, John; Roe, Jane',
+    'John Smith, Jr., and Jane Roe' => 'Smith Jr, John; Roe, Jane',
+    'Smith, John, Jr. and Roe, Jane' => 'Smith Jr, John; Roe, Jane',
+    'Smith, John, Jr., Roe, Jane' => 'Smith Jr, John; Roe, Jane',
+    'Roe, Jane, Smith, John, Jr.' => 'Roe, Jane; Smith Jr, John',
+    'Roe, Jane, Smith, Jr., John' => 'Roe, Jane; Smith Jr, John',
+    'Jane Roe, John Smith, Jr.' => 'Roe, Jane; Smith Jr, John',
+    'John Smith, Jr., Jane Roe' => 'Smith Jr, John; Roe, Jane',
     'Dr Afsar Abbas' => 'Abbas, Afsar',
     'R. de Sousa' => 'de Sousa, R.',
     'Jean Claude van Damme' => 'van Damme, Jean Claude',
@@ -60,6 +104,11 @@ my %tests = (
 );
 is(cleanName("Hacker, PMS"),"Hacker, P. M. S.");
 is(cleanName("Doe, Bob"),"Doe, Bob");
+is(cleanName("Krotoszynski, Jr., Ronald J."),"Krotoszynski Jr, Ronald J.");
+is(cleanName("Krotoszynski Jr Ronald J."),"Krotoszynski Jr, Ronald J.");
+is(cleanName("Thomas E. Hill, Jr."),"Hill Jr, Thomas E.");
+is(cleanName("Henry E. Kyburg Jr."),"Kyburg Jr, Henry E.");
+is(cleanName("Jr. Henry E. Kyburg"),"Kyburg Jr, Henry E.");
 #print cleanName("Guilherme Gusmão da Silva");
 foreach my $t (keys %tests) {
 	my $r = join('; ',parseNames($t));
