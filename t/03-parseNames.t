@@ -1,4 +1,4 @@
-use Text::Names 'parseNames','cleanName','composeName','parseName','parseName2','cleanParseName','reverseName','normalizeSuffixName';
+use Text::Names 'parseNames','cleanName','composeName','parseName','parseName2','cleanParseName','reverseName','normalizeSuffixName','normalizeJrSuffix','hasJrSuffix','hasInvertedJrSuffix';
 use Test::More;
 use utf8;
 binmode(STDOUT,":utf8");
@@ -17,6 +17,13 @@ is(normalizeSuffixName("Krotoszynski, Jr., Ronald J."), "Krotoszynski Jr, Ronald
 is(normalizeSuffixName("Hill, Jr., Thomas E."), "Hill Jr, Thomas E.");
 is(normalizeSuffixName("Smith, John, Jr."), "Smith Jr, John");
 is(normalizeSuffixName("Henry E. Kyburg, Jr."), "Henry E. Kyburg, Jr.");
+is(normalizeJrSuffix("Jr."), "Jr");
+is(normalizeJrSuffix("jr"), "Jr");
+is(normalizeJrSuffix("III"), undef);
+ok(hasJrSuffix("Krotoszynski Jr, Ronald J."));
+ok(hasJrSuffix("Henry E. Kyburg, Jr."));
+ok(hasInvertedJrSuffix("Krotoszynski, Jr., Ronald J."));
+ok(!hasInvertedJrSuffix("Krotoszynski Jr, Ronald J."));
 my ($f2,$l2) = parseName("Krotoszynski, Jr., Ronald J.");
 is($f2,"Ronald J.");
 is($l2,"Krotoszynski Jr");

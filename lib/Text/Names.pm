@@ -18,6 +18,9 @@ our %EXPORT_TAGS = ( 'all' => [ qw(
     abbreviationOf 
     reverseName 
     normalizeSuffixName
+    normalizeJrSuffix
+    hasJrSuffix
+    hasInvertedJrSuffix
     cleanParseName 
     parseName 
     parseName2 
@@ -837,6 +840,24 @@ sub _normalize_suffix_token {
     $suffix =~ s/\.$//;
     return 'Jr' if lc($suffix) eq 'jr';
     return $suffix;
+}
+
+sub normalizeJrSuffix {
+    my $suffix = shift;
+    return undef unless defined $suffix;
+    $suffix =~ s/^\s+|\s+$//g;
+    $suffix =~ s/\.$//;
+    return lc($suffix) eq 'jr' ? 'Jr' : undef;
+}
+
+sub hasJrSuffix {
+    my $name = shift // '';
+    return $name =~ /(?:^|[,\s])Jr\.?(?:[,\s]|$)/i ? 1 : 0;
+}
+
+sub hasInvertedJrSuffix {
+    my $name = shift // '';
+    return $name =~ /,\s*Jr\.?\s*,/i ? 1 : 0;
 }
 
 sub _trim_name_part {
