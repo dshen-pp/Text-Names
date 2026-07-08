@@ -19,6 +19,9 @@ our %EXPORT_TAGS = ( 'all' => [ qw(
     reverseName 
     normalizeSuffixName
     normalizeJrSuffix
+    normalizeAuthorSourceValue
+    authorValueLooksPlaceholder
+    looksCjkSingleTokenName
     hasJrSuffix
     hasInvertedJrSuffix
     cleanParseName 
@@ -666,7 +669,11 @@ my $MERE_SEMI = '(?:\s*(?:;|<br>|<p>|<\/p>)\s*)';
 my $SEMI_AND = "(?:$MERE_SEMI|$AND)";
 my $COMMA_AND = "(?:$MERE_COMMA$AND|$AND|$MERE_COMMA)";
 my $SPACE = '(?:\s|\&nbsp;|\n|\r)';
-my $NAME_SUFFIX = '(?:Jr\.?)';
+my $NAME_SUFFIX = '(?:Jr\.?|Sr\.?|II|III|IV|V|VI|VII|VIII|IX|X)';
+my $RELIGIOUS_ORDER_POSTNOMINAL_RE = qr/(?:O\.?\s*P\.?|O\.?\s*S\.?\s*B\.?|O\.?\s*S\.?\s*F\.?|S\.?\s*S\.?\s*N\.?\s*D\.?|S\.?\s*J\.?|C\.?\s*S\.?\s*C\.?|C\.?\s*S\.?\s*B\.?|O\.?\s*F\.?\s*M\.?)/i;
+my $ACADEMIC_DEGREE_POSTNOMINAL_RE = qr/(?:Ph\.?\s*D\.?|D\.?\s*Phil\.?|LL\.?\s*[BMD]\.?|[BM]\.?\s*A\.?|M\.?\s*Phil\.?|D\.?\s*D\.?|S\.?\s*T\.?\s*D\.?|J\.?\s*D\.?|M\.?\s*D\.?|Ed\.?\s*D\.?|Psy\.?\s*D\.?)/i;
+my $NON_IDENTITY_POSTNOMINAL_RE = qr/(?:$RELIGIOUS_ORDER_POSTNOMINAL_RE|$ACADEMIC_DEGREE_POSTNOMINAL_RE)/i;
+my $CJK_NAME_CHAR_RE = qr/(?:\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul})/;
 my @NAME_PREFIXES_RE;
 for (my $i=0; $i<=$#NAME_PREFIXES; $i++) {
     $NAME_PREFIXES_RE[$i] = '(?:$|^|\W)' . $NAME_PREFIXES[$i] . '(?:$|^|\W)';
@@ -839,6 +846,8 @@ sub _normalize_suffix_token {
     $suffix =~ s/^\s+|\s+$//g;
     $suffix =~ s/\.$//;
     return 'Jr' if lc($suffix) eq 'jr';
+    return 'Sr' if lc($suffix) eq 'sr';
+    return uc($suffix) if $suffix =~ /^(?:II|III|IV|V|VI|VII|VIII|IX|X)$/i;
     return $suffix;
 }
 
@@ -979,6 +988,63 @@ sub normalizeSuffixName {
     }
 
     return $n;
+}
+
+sub normalizeAuthorSourceValue {
+    my ($value) = @_;
+    return unless defined $value;
+
+    $value =~ s/^\s+|\s+$//g;
+    $value =~ s/\s+/ /g;
+
+    # Religious-order and academic-degree postnominals are display/provenance
+    # details, not part of the canonical author identity. Strip them before
+    # name parsing so "Brophy, O.P., Justin Marie" and
+    # "Papadimitriou, Ph.D., Christina" normalize as author names.
+    $value =~ s/^\s*$NON_IDENTITY_POSTNOMINAL_RE\s*,+\s*//;
+    while ($value =~ s/^([^,]+),\s*$NON_IDENTITY_POSTNOMINAL_RE\s*,\s*(.+)$/$1, $2/) {}
+    while ($value =~ s/(?:,|\s)\s*$NON_IDENTITY_POSTNOMINAL_RE\s*$//) {
+        $value =~ s/^\s+|\s+$//g;
+    }
+
+    $value = normalizeSuffixName($value);
+
+    # Natural-order trailing suffixes need handling before parseName treats
+    # roman suffixes as initials, e.g. "Frederick H. Gautschi, III".
+    if ($value =~ /^(.+?)\s+([^\s,]+),\s*($NAME_SUFFIX)$/i) {
+        my ($given, $last, $suffix) = ($1, $2, _normalize_suffix_token($3));
+        $value = _compose_suffix_name($last, $suffix, $given);
+    }
+
+    $value =~ s/,\s*$//;
+    return $value;
+}
+
+sub authorValueLooksPlaceholder {
+    my ($value) = @_;
+    return 1 unless defined $value;
+
+    my $normalized = $value;
+    $normalized =~ s/^\s+|\s+$//g;
+    return 1 unless length $normalized;
+    return 1 if $normalized =~ /^,/;
+
+    my $content = $normalized;
+    $content =~ s/[^\p{L}\p{N}]//g;
+    return length($content) ? 0 : 1;
+}
+
+sub looksCjkSingleTokenName {
+    my ($value) = @_;
+    return 0 unless defined $value;
+
+    utf8::decode($value) unless utf8::is_utf8($value);
+    $value =~ s/^\s+|\s+$//g;
+    $value =~ s/,\s*$//;
+    return 0 unless length $value;
+    return 0 if $value =~ /[,\s]/;
+
+    return $value =~ /^(?:$CJK_NAME_CHAR_RE)+$/ ? 1 : 0;
 }
 
 sub _normalize_suffix_name_list {
@@ -1580,6 +1646,7 @@ sub cleanName {
     #warn "$l, $f";
     # now final capitalization
     $n = capitalize($n,notSentence=>1); #,PRESERVE_ANYCAPS=>1, NOT_CAPITALIZED=>\@PREFIXES);	
+    $n = normalizeSuffixName($n);
     return $n;
 }
 
