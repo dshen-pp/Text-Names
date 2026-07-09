@@ -670,9 +670,12 @@ my $SEMI_AND = "(?:$MERE_SEMI|$AND)";
 my $COMMA_AND = "(?:$MERE_COMMA$AND|$AND|$MERE_COMMA)";
 my $SPACE = '(?:\s|\&nbsp;|\n|\r)';
 my $NAME_SUFFIX = '(?:Jr\.?|Sr\.?|II|III|IV|V|VI|VII|VIII|IX|X)';
-my $RELIGIOUS_ORDER_POSTNOMINAL_RE = qr/(?:O\.?\s*P\.?|O\.?\s*S\.?\s*B\.?|O\.?\s*S\.?\s*F\.?|S\.?\s*S\.?\s*N\.?\s*D\.?|S\.?\s*J\.?|C\.?\s*S\.?\s*C\.?|C\.?\s*S\.?\s*B\.?|O\.?\s*F\.?\s*M\.?)/i;
+my $RELIGIOUS_ORDER_POSTNOMINAL_RE = qr/(?:O\.?\s*P\.?|O\.?\s*S\.?\s*B\.?|O\.?\s*S\.?\s*F\.?|S\.?\s*S\.?\s*N\.?\s*D\.?|S\.?\s*D\.?\s*S\.?|R\.?\s*S\.?\s*M\.?|S\.?\s*J\.?|C\.?\s*S\.?\s*C\.?|C\.?\s*S\.?\s*B\.?|O\.?\s*F\.?\s*M\.?)/i;
 my $ACADEMIC_DEGREE_POSTNOMINAL_RE = qr/(?:Ph\.?\s*D\.?|D\.?\s*Phil\.?|LL\.?\s*[BMD]\.?|[BM]\.?\s*A\.?|M\.?\s*Phil\.?|D\.?\s*D\.?|S\.?\s*T\.?\s*D\.?|J\.?\s*D\.?|M\.?\s*D\.?|Ed\.?\s*D\.?|Psy\.?\s*D\.?)/i;
 my $NON_IDENTITY_POSTNOMINAL_RE = qr/(?:$RELIGIOUS_ORDER_POSTNOMINAL_RE|$ACADEMIC_DEGREE_POSTNOMINAL_RE)/i;
+my $HONORIFIC_TITLE_RE = qr/(?:Mr|Ms|Mrs|Miss|Mx|Dr|Prof|Professor|Sir|Dame)\.?/i;
+my $RELIGIOUS_INITIAL_TITLE_RE = qr/(?:Sister|Brother|Father|Fr\.?|Reverend|Rev\.?)\s+(?:[A-Z]\.\s*)+/i;
+my $HIGH_CONFIDENCE_RELIGIOUS_TITLE_RE = qr/Sister\s+Mary/i;
 my $CJK_NAME_CHAR_RE = qr/(?:\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul})/;
 my @NAME_PREFIXES_RE;
 for (my $i=0; $i<=$#NAME_PREFIXES; $i++) {
@@ -996,6 +999,16 @@ sub normalizeAuthorSourceValue {
 
     $value =~ s/^\s+|\s+$//g;
     $value =~ s/\s+/ /g;
+    # Some PDC CJK author fields carry a stray leading punctuation mark.
+    # Only strip it when the next real character is CJK, so Latin initials are unaffected.
+    $value =~ s/^[\p{P}\p{S}]+\s*(?=$CJK_NAME_CHAR_RE)//;
+
+    my $raw_value = $value;
+    my $has_religious_order_postnominal =
+        $raw_value =~ /(?:,|\s)\s*$RELIGIOUS_ORDER_POSTNOMINAL_RE\s*$/i ||
+        $raw_value =~ /,\s*$RELIGIOUS_ORDER_POSTNOMINAL_RE\s*,/i;
+    my $has_trailing_high_confidence_title =
+        $raw_value =~ /,+\s*$HIGH_CONFIDENCE_RELIGIOUS_TITLE_RE\s*$/i;
 
     # Religious-order and academic-degree postnominals are display/provenance
     # details, not part of the canonical author identity. Strip them before
@@ -1006,6 +1019,17 @@ sub normalizeAuthorSourceValue {
     while ($value =~ s/(?:,|\s)\s*$NON_IDENTITY_POSTNOMINAL_RE\s*$//) {
         $value =~ s/^\s+|\s+$//g;
     }
+    if ($has_religious_order_postnominal) {
+        $value =~ s/^\s*$HIGH_CONFIDENCE_RELIGIOUS_TITLE_RE\s+//;
+    }
+    if ($has_trailing_high_confidence_title) {
+        $value =~ s/,+\s*$HIGH_CONFIDENCE_RELIGIOUS_TITLE_RE\s*$//;
+    }
+    $value =~ s/^\s*$HONORIFIC_TITLE_RE\s+//;
+    $value =~ s/,+\s*$HONORIFIC_TITLE_RE\s*$//;
+    $value =~ s/^\s*$RELIGIOUS_INITIAL_TITLE_RE//;
+    $value =~ s/,+\s*$RELIGIOUS_INITIAL_TITLE_RE\s*$//;
+    $value =~ s/^\s+|\s+$//g;
 
     $value = normalizeSuffixName($value);
 
@@ -1040,6 +1064,7 @@ sub looksCjkSingleTokenName {
 
     utf8::decode($value) unless utf8::is_utf8($value);
     $value =~ s/^\s+|\s+$//g;
+    $value =~ s/^[\p{P}\p{S}]+\s*(?=$CJK_NAME_CHAR_RE)//;
     $value =~ s/,\s*$//;
     return 0 unless length $value;
     return 0 if $value =~ /[,\s]/;
