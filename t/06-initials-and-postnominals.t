@@ -63,6 +63,7 @@ ok(samePerson("Gary M. Gurtler, S.J.", "Gurtler, Gary M."));
 is(normalizeAuthorSourceValue("Fr. Allan D. Fitzgerald, O.S.A."), "Allan D. Fitzgerald");
 is(normalizeAuthorSourceValue("Gary M. Gurtler, S.J."), "Gary M. Gurtler");
 is(normalizeAuthorSourceValue("Romanus Cessario, O.P."), "Romanus Cessario");
+is(normalizeAuthorSourceValue("Albino Barrera O.P."), "Albino Barrera");
 
 # After a lone surname, a compound surname or a surname with a particle, the same letters may be
 # the person's initials, so they stay.

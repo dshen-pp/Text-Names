@@ -1082,7 +1082,7 @@ sub _name_before_trailing_postnominal {
         my ($name_before, $postnominal) = ($1, $2);
         my $reads_as_surname = $postnominal =~ /^\p{Lu}\p{Ll}+$/;
         return undef if $reads_as_surname;
-        return $name_before if _looks_like_natural_full_name($name_before);
+        return $name_before if _name_is_whole_without_postnominal($name_before, $postnominal);
         return undef;
     }
 
