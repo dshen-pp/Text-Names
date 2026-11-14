@@ -7,3 +7,5 @@ t/01-abbreviations.t
 t/02-samePerson.t
 t/03-parseNames.t
 t/04-common.t
+t/05-weakenings.t
+t/06-initials-and-postnominals.t

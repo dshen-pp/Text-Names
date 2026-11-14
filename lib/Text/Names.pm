@@ -670,7 +670,21 @@ my $SEMI_AND = "(?:$MERE_SEMI|$AND)";
 my $COMMA_AND = "(?:$MERE_COMMA$AND|$AND|$MERE_COMMA)";
 my $SPACE = '(?:\s|\&nbsp;|\n|\r)';
 my $NAME_SUFFIX = '(?:Jr\.?|Sr\.?|II|III|IV|V|VI|VII|VIII|IX|X)';
-my $RELIGIOUS_ORDER_POSTNOMINAL_RE = qr/(?:O\.?\s*P\.?|O\.?\s*S\.?\s*B\.?|O\.?\s*S\.?\s*F\.?|S\.?\s*S\.?\s*N\.?\s*D\.?|S\.?\s*D\.?\s*S\.?|R\.?\s*S\.?\s*M\.?|S\.?\s*J\.?|C\.?\s*S\.?\s*C\.?|C\.?\s*S\.?\s*B\.?|O\.?\s*F\.?\s*M\.?)/i;
+# Religious-order postnominals, each written with or without periods and spaces ("S.J.", "S. J.", "SJ").
+# Left out: C.M., C.P., L.C., which after a name are as often the person's initials.
+my @RELIGIOUS_ORDER_POSTNOMINALS = (
+    [qw(S J)], [qw(O P)], [qw(O S A)], [qw(O S B)], [qw(O S F)], [qw(O S M)], [qw(O S U)],
+    [qw(O F M Cap)], [qw(O F M Conv)], [qw(O F M)], [qw(O C D)], [qw(O C S O)], [qw(O Carm)], [qw(O Cist)],
+    [qw(O Praem)], [qw(O M I)], [qw(C S C)], [qw(C S B)], [qw(C S J)], [qw(C S Sp)], [qw(C Ss R)],
+    [qw(S D B)], [qw(S D S)], [qw(S V D)], [qw(S S N D)], [qw(R S M)],
+);
+my $RELIGIOUS_ORDER_POSTNOMINAL_RE = do {
+    my @patterns = map { join('\.?\s*', @$_) . '\.?' } @RELIGIOUS_ORDER_POSTNOMINALS;
+    my $alternatives = join('|', @patterns);
+    qr/(?:$alternatives)/i;
+};
+# Titles that go with a religious-order postnominal ("Fr. Allan D. Fitzgerald, O.S.A.").
+my $RELIGIOUS_TITLE_RE = qr/(?:Fr|Father|Rev|Reverend|Br|Brother|Sr|Sister|Dom|Mother)\.?/i;
 my $ACADEMIC_DEGREE_POSTNOMINAL_RE = qr/(?:Ph\.?\s*D\.?|D\.?\s*Phil\.?|LL\.?\s*[BMD]\.?|[BM]\.?\s*A\.?|M\.?\s*Phil\.?|D\.?\s*D\.?|S\.?\s*T\.?\s*D\.?|J\.?\s*D\.?|M\.?\s*D\.?|Ed\.?\s*D\.?|Psy\.?\s*D\.?)/i;
 my $NON_IDENTITY_POSTNOMINAL_RE = qr/(?:$RELIGIOUS_ORDER_POSTNOMINAL_RE|$ACADEMIC_DEGREE_POSTNOMINAL_RE)/i;
 my $HONORIFIC_TITLE_RE = qr/(?:Mr|Ms|Mrs|Miss|Mx|Dr|Prof|Professor|Sir|Dame)\.?/i;
@@ -956,7 +970,6 @@ sub _parse_suffix_name {
         return undef if $base =~ /,/;
 
         my ($given, $last) = parseName($base);
-        ($given, $last) = _repair_natural_given_last($given, $last);
         return [ _trim_name_part($given), _trim_name_part("$last $suffix") ]
             if defined($given) && defined($last) && $given =~ /\S/ && $last =~ /\S/;
     }
@@ -1014,10 +1027,15 @@ sub normalizeAuthorSourceValue {
     # details, not part of the canonical author identity. Strip them before
     # name parsing so "Brophy, O.P., Justin Marie" and
     # "Papadimitriou, Ph.D., Christina" normalize as author names.
-    $value =~ s/^\s*$NON_IDENTITY_POSTNOMINAL_RE\s*,+\s*//;
+    if ($value =~ /^\s*($NON_IDENTITY_POSTNOMINAL_RE)\s*,+\s*(.*)$/) {
+        my ($postnominal, $rest) = ($1, $2);
+        my $name_after = $rest;
+        $name_after =~ s/[\s,]+$//;
+        $value = $rest if _name_is_whole_without_postnominal($name_after, $postnominal);
+    }
     while ($value =~ s/^([^,]+),\s*$NON_IDENTITY_POSTNOMINAL_RE\s*,\s*(.+)$/$1, $2/) {}
-    while ($value =~ s/(?:,|\s)\s*$NON_IDENTITY_POSTNOMINAL_RE\s*$//) {
-        $value =~ s/^\s+|\s+$//g;
+    while (defined(my $name_before = _name_before_trailing_postnominal($value))) {
+        $value = _trim_name_part($name_before);
     }
     if ($has_religious_order_postnominal) {
         $value =~ s/^\s*$HIGH_CONFIDENCE_RELIGIOUS_TITLE_RE\s+//;
@@ -1030,6 +1048,7 @@ sub normalizeAuthorSourceValue {
     $value =~ s/^\s*$RELIGIOUS_INITIAL_TITLE_RE//;
     $value =~ s/,+\s*$RELIGIOUS_INITIAL_TITLE_RE\s*$//;
     $value =~ s/^\s+|\s+$//g;
+    $value = _without_religious_title($value) if $has_religious_order_postnominal;
 
     $value = normalizeSuffixName($value);
 
@@ -1042,6 +1061,41 @@ sub normalizeAuthorSourceValue {
 
     $value =~ s/,\s*$//;
     return $value;
+}
+
+# The name in front of a trailing postnominal, when the postnominal can't be the person's initials or
+# surname: after a whole natural-order name ("Stephen Hall, D.Phil", "Romanus Cessario, O.P.",
+# "David A. Stone Ph.D.") or after a whole inverted name and a comma ("Smith, John, Ph.D.").
+# Undef otherwise: "Harrison, S. J.", "Rodriguez Artacho, M. A.", "Smith, John M. A.", "Joseph Ma".
+sub _name_before_trailing_postnominal {
+    my ($value) = @_;
+
+    if ($value =~ /^(.*?)\s*,\s*($NON_IDENTITY_POSTNOMINAL_RE)\s*$/) {
+        my ($name_before, $postnominal) = ($1, $2);
+        my $is_inverted_name = $name_before =~ /\S\s*,\s*\S/;
+        return $name_before if $is_inverted_name;
+        return $name_before if _name_is_whole_without_postnominal($name_before, $postnominal);
+        return undef;
+    }
+
+    if ($value =~ /^(.*?)\s+($NON_IDENTITY_POSTNOMINAL_RE)\s*$/) {
+        my ($name_before, $postnominal) = ($1, $2);
+        my $reads_as_surname = $postnominal =~ /^\p{Lu}\p{Ll}+$/;
+        return undef if $reads_as_surname;
+        return $name_before if _looks_like_natural_full_name($name_before);
+        return undef;
+    }
+
+    return undef;
+}
+
+# Whether $name, a natural-order name written next to $postnominal, is whole without it, so the
+# postnominal is not the person's initials.
+sub _name_is_whole_without_postnominal {
+    my ($name, $postnominal) = @_;
+    my $is_religious_order = $postnominal =~ /^$RELIGIOUS_ORDER_POSTNOMINAL_RE$/;
+    return _may_be_natural_full_name($name) if $is_religious_order;
+    return _looks_like_natural_full_name($name);
 }
 
 sub authorValueLooksPlaceholder {
@@ -1094,31 +1148,113 @@ sub _normalize_suffix_name_list {
     return $n;
 }
 
-# parseName() can treat a single-letter middle initial as part of the surname
-# when that initial matches a surname-prefix token (e.g. "E.").
-# For natural-order names with trailing suffixes ("Firstname M. Lastname, Jr."),
-# move those leading initials back to the given-name side.
-sub _repair_natural_given_last {
-    my ($given, $last) = @_;
-    return ($given, $last) unless defined $given && defined $last;
+# The words of $name when it could be a whole name in natural order: two or more words, no comma, not
+# ending with an initial ("Bettoni E.") and not starting with a particle ("van Enk", "De Strycker").
+sub _words_of_possible_natural_name {
+    my ($name) = @_;
+    $name = _trim_name_part($name);
+    return () if $name =~ /,/;
 
-    if ($last =~ /^\s*((?:[A-Z]\.\s*)+)(\S.*)$/) {
-        my ($initials, $rest_last) = ($1, $2);
-        $initials =~ s/\s+/ /g;
-        $initials =~ s/^\s+|\s+$//g;
-        $given =~ s/^\s+|\s+$//g;
-        my $given_cmp = $given;
-        $given_cmp =~ s/\s+/ /g;
-        unless ($given_cmp =~ /\Q$initials\E\s*$/) {
-            $given = length($given) ? "$given $initials" : $initials;
-            $last = $rest_last;
-            $given =~ s/\s+/ /g;
-            $given =~ s/^\s+|\s+$//g;
-            $last =~ s/^\s+|\s+$//g;
-        }
+    my @words = split(/\s+/, $name);
+    return () if @words < 2;
+    return () if $words[-1] =~ /^\p{Lu}\.?$/;
+    my $starts_with_particle = grep { lc($words[0]) eq $_ } @NAME_PREFIXES;
+    return () if $starts_with_particle;
+    return @words;
+}
+
+# Whether $name reads as a whole name in natural order ("Gary M. Gurtler", "R. Stoeger",
+# "Fr. Allan D. Fitzgerald", "Patrick Riordan"), rather than a surname that its initials may follow
+# ("Harrison", "Badia Cabrera", "van Enk").
+sub _looks_like_natural_full_name {
+    my ($name) = @_;
+    my @words = _words_of_possible_natural_name($name);
+    return 0 unless @words;
+
+    my $first_word = $words[0];
+    my @words_before_last = @words[0 .. $#words - 1];
+
+    return 1 if $first_word =~ /^(?:$RELIGIOUS_TITLE_RE|$HONORIFIC_TITLE_RE)$/;
+    my $has_initial = grep { /^\p{Lu}\.?$/ } @words_before_last;
+    return 1 if $has_initial;
+    return 1 if isCommonFirstname($first_word);
+    return 0;
+}
+
+# A looser test for names before a religious-order postnominal, which nearly always follows a whole
+# name, often one no name list knows ("Romanus Cessario, O.P.", "Columba Stewart, O.S.B."): only a
+# name starting with a known surname is taken for a compound surname ("Herrera Molina, S. J.").
+sub _may_be_natural_full_name {
+    my ($name) = @_;
+    my @words = _words_of_possible_natural_name($name);
+    return 0 unless @words;
+    return 1 if _looks_like_natural_full_name($name);
+    my $starts_with_surname = isCommonSurname($words[0]);
+    return $starts_with_surname ? 0 : 1;
+}
+
+sub _without_religious_title {
+    my ($name) = @_;
+    $name = _trim_name_part($name);
+    $name =~ s/^$RELIGIOUS_TITLE_RE\s+(?=\S)//;
+    return $name;
+}
+
+# A religious-order postnominal is not part of the name: "Gary M. Gurtler, S.J." -> "Gary M. Gurtler",
+# "Gurtler, Gary M., S.J." and "Gurtler, S.J., Gary M." -> "Gurtler, Gary M.". A title before the name
+# goes with it ("Fr. Allan D. Fitzgerald, O.S.A." -> "Allan D. Fitzgerald"). After a lone surname the
+# letters stay, as they may be the person's initials ("Harrison, S. J.").
+sub _strip_religious_order_postnominal {
+    my ($name) = @_;
+    return $name unless defined $name;
+
+    my @parts = map { _trim_name_part($_) } split(/,/, $name);
+    my @postnominal_positions = grep { $parts[$_] =~ /^$RELIGIOUS_ORDER_POSTNOMINAL_RE$/ } 0 .. $#parts;
+    return $name unless @postnominal_positions == 1;
+    my $postnominal_position = $postnominal_positions[0];
+
+    if (@parts == 2 && $postnominal_position == 1) {
+        my $natural_name = $parts[0];
+        return $name unless _may_be_natural_full_name($natural_name);
+        return _without_religious_title($natural_name);
     }
 
-    return ($given, $last);
+    if (@parts == 3 && $postnominal_position > 0) {
+        my $surname = $parts[0];
+        my $given = $postnominal_position == 1 ? $parts[2] : $parts[1];
+        return $name unless length($surname) && length($given);
+        return "$surname, " . _without_religious_title($given);
+    }
+
+    return $name;
+}
+
+# The same for a list of names, where only a postnominal after a natural-order name is taken
+# out ("John J. Cleary, Gary M. Gurtler, S.J."): parseNames() would otherwise read it as
+# another author.
+sub _strip_religious_order_postnominals_from_list {
+    my ($name_list) = @_;
+    my $and_word = '(?:and|&|&amp;|with)';
+    my $name_text = qr/(?:(?!\s$and_word\s)[^;,])+?/i;
+
+    $name_list =~ s{
+        (^|[;,]|\s$and_word\s)                      # where this name starts
+        ($name_text)                                # the name
+        (\s*,\s*$RELIGIOUS_ORDER_POSTNOMINAL_RE)    # its postnominal
+        (?=\s*(?:$|[;,]|\s$and_word\s))             # which ends the name
+    }{
+        $1 . _list_name_without_postnominal($2, $3)
+    }gexi;
+
+    return $name_list;
+}
+
+sub _list_name_without_postnominal {
+    my ($name, $postnominal) = @_;
+    return $name . $postnominal unless _may_be_natural_full_name($name);
+
+    my $leading_space = $name =~ /^(\s*)/ ? $1 : '';
+    return $leading_space . _without_religious_title($name);
 }
 
 
@@ -1156,6 +1292,7 @@ sub parseName {
 
     return undef unless defined $in;
  	#print "-->parseName in: $in\n";
+    $in = _strip_religious_order_postnominal($in);
 
     if (my $suffix_parts = _parse_suffix_name($in)) {
         return @$suffix_parts;
@@ -1168,6 +1305,8 @@ sub parseName {
     $in =~ s/\W*et\.? al\.?\W*//;
     $in =~ s/\.\s*$//; # remove . at the end
  	#print "$in -->";
+    # normalizeNameWhitespace() turns the particles "e" and "y" into "E." and "Y.", which look like initials
+    my $name_as_written = $in;
     $in = normalizeNameWhitespace($in);
     #print "$in'\n";
 
@@ -1207,7 +1346,23 @@ sub parseName {
         $lastname = "$lastname Jr" if $jr;
         # add prefixes or Jr to lastname
         #warn join(" - ",@bits);
-        while (defined $bits[-1] and $bits[-1] =~ /^$PREFIXES$/i) {
+        while (defined $bits[-1]) {
+            my $word = $bits[-1];
+            if ($word =~ /^([ey])\.?$/i) {
+                # "e"/"y" join two surnames ("Ortega y Gasset", "Oliveira e Silva"); "E."/"Y." are initials
+                my $particle = lc $1;
+                my ($surname_word) = split(' ', $lastname);
+                my $written_as_particle = $name_as_written =~ /\S\s+\Q$particle\E\s+\Q$surname_word\E(?:\s|$)/;
+                last unless $written_as_particle;
+                $lastname = splice(@bits,-1,1) . " $lastname";
+                # the word before the particle is the first surname, unless it is an initial or the last given name
+                my $first_surname_can_be_taken = @bits > 1 && $bits[-1] !~ /^\p{Lu}\.$/;
+                if ($first_surname_can_be_taken) {
+                    $lastname = splice(@bits,-1,1) . " $lastname";
+                }
+                next;
+            }
+            last unless $word =~ /^$PREFIXES$/i;
             #warn "GOT PREFIX: $bits[-1]";
             $lastname = splice(@bits,-1,1) . " $lastname";
         }
@@ -1237,6 +1392,7 @@ sub parseNames {
     my $in = shift;
     my $reverse = shift; # means names are stupidly written like this: David, Bourget
     return undef if !defined $in;
+    $in = _strip_religious_order_postnominals_from_list($in);
     while($in =~ s/(^|\W)(dr|prof\.? em\.?|prof|profdr|prof|sir|mrs|ms|mr)\.?(\W)/$1 $3/gi) {}
     $in =~ s/^\s+//;
     $in =~ s/([^A-Z]{2,2})\.\s*/$1/; # remove . at the end
