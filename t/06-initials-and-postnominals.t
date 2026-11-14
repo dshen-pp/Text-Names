@@ -1,4 +1,4 @@
-use Text::Names 'parseName','parseNames','cleanName','normalizeAuthorSourceValue','samePerson';
+use Text::Names 'parseName','parseName2','parseNames','cleanName','normalizeAuthorSourceValue','samePerson';
 use Test::More;
 use utf8;
 binmode(STDOUT,":utf8");
@@ -60,6 +60,10 @@ is_deeply([parseNames("Fr. Allan D. Fitzgerald, O.S.A.")], ["Fitzgerald, Allan D
 is_deeply([parseNames("John J. Cleary and Gary M. Gurtler, S.J.")], ["Cleary, John J.", "Gurtler, Gary M."]);
 is_deeply([parseNames("Gary M. Gurtler, S.J., John J. Cleary")], ["Gurtler, Gary M.", "Cleary, John J."]);
 ok(samePerson("Gary M. Gurtler, S.J.", "Gurtler, Gary M."));
+# parseName2 (first, initials, last, suffix) is what xPapers' cleanAll rebuilds author names from
+is_deeply([parseName2("Gurtler, S.J., Gary M.")], ["Gary", "M.", "Gurtler", undef]);
+is_deeply([parseName2("R. Stoeger, S. J.")], ["R.", undef, "Stoeger", undef]);
+is_deeply([parseName2("Harrison, S. J.")], ["S.", "J.", "Harrison", undef]);
 is(normalizeAuthorSourceValue("Fr. Allan D. Fitzgerald, O.S.A."), "Allan D. Fitzgerald");
 is(normalizeAuthorSourceValue("Gary M. Gurtler, S.J."), "Gary M. Gurtler");
 is(normalizeAuthorSourceValue("Romanus Cessario, O.P."), "Romanus Cessario");

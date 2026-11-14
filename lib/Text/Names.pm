@@ -1540,6 +1540,10 @@ sub parseName2 {
     my $in = shift;
     my ($i,$s);
     return ("","") unless defined $in;
+    # a religious-order postnominal is not part of the name ("Gurtler, S.J., Gary M.", "R. Stoeger, S. J.")
+    if (_strip_religious_order_postnominal($in) ne $in) {
+        $in = composeName(parseName($in));
+    }
     if (my $suffix_parts = _parse_suffix_name($in)) {
         $in = composeName(@$suffix_parts);
     } else {
