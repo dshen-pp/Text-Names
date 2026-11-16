@@ -1,4 +1,4 @@
-use Text::Names 'parseName','parseName2','parseNames','cleanName','normalizeAuthorSourceValue','samePerson';
+use Text::Names 'parseName','parseName2','parseNames','parseNameList','cleanName','normalizeAuthorSourceValue','samePerson';
 use Test::More;
 use utf8;
 binmode(STDOUT,":utf8");
@@ -26,6 +26,7 @@ is(cleanName("Thomas E. Hill"), "Hill, Thomas E.");
 is(cleanName("Henry E. Kyburg Jr."), "Kyburg Jr, Henry E.");
 is(cleanName("Hill, Thomas E."), "Hill, Thomas E.");
 is_deeply([parseNames("Thomas E. Hill and Ana Y. Lee")], ["Hill, Thomas E.", "Lee, Ana Y."]);
+is_deeply([parseNameList("Jorge J.E. Gracia")], ["Gracia, Jorge J. E."]);
 
 # The lowercase particles "e" and "y" join two surnames. They come out as "E."/"Y.", as in every
 # other parse of these names (normalizeNameWhitespace).
