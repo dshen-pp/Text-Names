@@ -669,7 +669,11 @@ my $MERE_SEMI = '(?:\s*(?:;|<br>|<p>|<\/p>)\s*)';
 my $SEMI_AND = "(?:$MERE_SEMI|$AND)";
 my $COMMA_AND = "(?:$MERE_COMMA$AND|$AND|$MERE_COMMA)";
 my $SPACE = '(?:\s|\&nbsp;|\n|\r)';
-my $NAME_SUFFIX = '(?:Jr\.?|Sr\.?|II|III|IV|V|VI|VII|VIII|IX|X)';
+# Name suffixes: Jr., Sr., and Roman numerals from II to IX. II, III, IV, VII and VIII in any case, as stored names
+# carry them title-cased ("Soles Iii, Donald E."); VI and IX only in capitals, since "Vi" is a given name; a lone V
+# or X is an initial. Callers match with /i, so (?-i:...) keeps VI and IX case-sensitive.
+my $ROMAN_NAME_SUFFIX = '(?:II|III|IV|VII|VIII|(?-i:VI|IX))';
+my $NAME_SUFFIX = "(?:Jr\\.?|Sr\\.?|$ROMAN_NAME_SUFFIX)";
 # Religious-order postnominals, each written with or without periods and spaces ("S.J.", "S. J.", "SJ").
 # Left out: C.M., C.P., L.C., which after a name are as often the person's initials.
 my @RELIGIOUS_ORDER_POSTNOMINALS = (
@@ -688,7 +692,10 @@ my $RELIGIOUS_TITLE_RE = qr/(?:Fr|Father|Rev|Reverend|Br|Brother|Sr|Sister|Dom|M
 my $ACADEMIC_DEGREE_POSTNOMINAL_RE = qr/(?:Ph\.?\s*D\.?|D\.?\s*Phil\.?|LL\.?\s*[BMD]\.?|[BM]\.?\s*A\.?|M\.?\s*Phil\.?|D\.?\s*D\.?|S\.?\s*T\.?\s*D\.?|J\.?\s*D\.?|M\.?\s*D\.?|Ed\.?\s*D\.?|Psy\.?\s*D\.?)/i;
 my $NON_IDENTITY_POSTNOMINAL_RE = qr/(?:$RELIGIOUS_ORDER_POSTNOMINAL_RE|$ACADEMIC_DEGREE_POSTNOMINAL_RE)/i;
 my $HONORIFIC_TITLE_RE = qr/(?:Mr|Ms|Mrs|Miss|Mx|Dr|Prof|Professor|Sir|Dame)\.?/i;
-my $RELIGIOUS_INITIAL_TITLE_RE = qr/(?:Sister|Brother|Father|Fr\.?|Reverend|Rev\.?)\s+(?:[A-Z]\.\s*)+/i;
+# "Sister M." before a nun's name in religion ("Sister M. Therese"): it goes even when only that one name is left.
+my $SISTER_INITIAL_TITLE_RE = qr/Sister\s+(?:[A-Z]\.\s*)+/i;
+# Other titles before initials ("Rev. J. A. Smith", "Foerster, Fr W."): there the initials are the person's own.
+my $CLERGY_INITIAL_TITLE_RE = qr/(?:Brother|Father|Fr\.?|Reverend|Rev\.?)\s+(?:[A-Z]\.\s*)+/i;
 my $HIGH_CONFIDENCE_RELIGIOUS_TITLE_RE = qr/Sister\s+Mary/i;
 my $CJK_NAME_CHAR_RE = qr/(?:\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul})/;
 my @NAME_PREFIXES_RE;
@@ -1033,7 +1040,12 @@ sub normalizeAuthorSourceValue {
         $name_after =~ s/[\s,]+$//;
         $value = $rest if _name_is_whole_without_postnominal($name_after, $postnominal);
     }
-    while ($value =~ s/^([^,]+),\s*$NON_IDENTITY_POSTNOMINAL_RE\s*,\s*(.+)$/$1, $2/) {}
+    while ($value =~ /^([^,]+),\s*$NON_IDENTITY_POSTNOMINAL_RE\s*,\s*(.+)$/) {
+        my ($surname, $rest) = ($1, $2);
+        # "Smith, S. J., Jr.": before a name suffix the letters are the person's initials
+        last if $rest =~ /^$NAME_SUFFIX$/i;
+        $value = "$surname, $rest";
+    }
     while (defined(my $name_before = _name_before_trailing_postnominal($value))) {
         $value = _trim_name_part($name_before);
     }
@@ -1045,8 +1057,10 @@ sub normalizeAuthorSourceValue {
     }
     $value =~ s/^\s*$HONORIFIC_TITLE_RE\s+//;
     $value =~ s/,+\s*$HONORIFIC_TITLE_RE\s*$//;
-    $value =~ s/^\s*$RELIGIOUS_INITIAL_TITLE_RE//;
-    $value =~ s/,+\s*$RELIGIOUS_INITIAL_TITLE_RE\s*$//;
+    $value =~ s/^\s*$SISTER_INITIAL_TITLE_RE//;
+    $value =~ s/,+\s*$SISTER_INITIAL_TITLE_RE\s*$//;
+    $value = _without_title_unless_one_word_left($value, qr/^\s*$CLERGY_INITIAL_TITLE_RE/);
+    $value = _without_title_unless_one_word_left($value, qr/,+\s*$CLERGY_INITIAL_TITLE_RE\s*$/);
     $value =~ s/^\s+|\s+$//g;
     $value = _without_religious_title($value) if $has_religious_order_postnominal;
 
@@ -1063,6 +1077,17 @@ sub normalizeAuthorSourceValue {
     return $value;
 }
 
+# $value without the title that $title_pattern matches, unless one word would be left. Then the name stays as
+# written ("Rev. J. A. Smith", "Foerster, Fr W."), the form already stored for such authors, instead of a lone
+# "Smith", which xPapers drops as Defective.
+sub _without_title_unless_one_word_left {
+    my ($value, $title_pattern) = @_;
+    my $without_title = $value;
+    $without_title =~ s/$title_pattern//;
+    my @words_left = grep { /\p{L}/ } split(/[\s,]+/, $without_title);
+    return @words_left >= 2 ? $without_title : $value;
+}
+
 # The name in front of a trailing postnominal, when the postnominal can't be the person's initials or
 # surname: after a whole natural-order name ("Stephen Hall, D.Phil", "Romanus Cessario, O.P.",
 # "David A. Stone Ph.D.") or after a whole inverted name and a comma ("Smith, John, Ph.D.").
@@ -1073,7 +1098,13 @@ sub _name_before_trailing_postnominal {
     if ($value =~ /^(.*?)\s*,\s*($NON_IDENTITY_POSTNOMINAL_RE)\s*$/) {
         my ($name_before, $postnominal) = ($1, $2);
         my $is_inverted_name = $name_before =~ /\S\s*,\s*\S/;
-        return $name_before if $is_inverted_name;
+        if ($is_inverted_name) {
+            my @name_parts = split(/\s*,\s*/, $name_before);
+            my $is_surname_and_suffix = @name_parts == 2 && $name_parts[1] =~ /^$NAME_SUFFIX$/i;
+            # "Smith, Jr., S. J.": after a surname and a name suffix the letters are the person's initials
+            return undef if $is_surname_and_suffix;
+            return $name_before;
+        }
         return $name_before if _name_is_whole_without_postnominal($name_before, $postnominal);
         return undef;
     }
@@ -1223,6 +1254,8 @@ sub _strip_religious_order_postnominal {
         my $surname = $parts[0];
         my $given = $postnominal_position == 1 ? $parts[2] : $parts[1];
         return $name unless length($surname) && length($given);
+        # "Smith, S. J., Jr.", "Smith, Jr., S. J.": before a name suffix the letters are the person's initials
+        return $name if $given =~ /^$NAME_SUFFIX$/i;
         return "$surname, " . _without_religious_title($given);
     }
 
@@ -1830,7 +1863,16 @@ sub cleanName {
     #warn "** $l, $f";
     #warn "$l, $f";
     # now final capitalization
-    $n = capitalize($n,notSentence=>1); #,PRESERVE_ANYCAPS=>1, NOT_CAPITALIZED=>\@PREFIXES);	
+    my $roman_suffix;
+    if (defined $l and $l =~ /\s($ROMAN_NAME_SUFFIX)$/) {
+        $roman_suffix = $1;
+    }
+    $n = capitalize($n,notSentence=>1); #,PRESERVE_ANYCAPS=>1, NOT_CAPITALIZED=>\@PREFIXES);
+    # capitalize() writes a Roman numeral suffix as "Iii"; give it back its capitals
+    if (defined $roman_suffix) {
+        my $capitalized_suffix = ucfirst(lc($roman_suffix));
+        $n =~ s/(?<=\s)\Q$capitalized_suffix\E(?=,|$)/$roman_suffix/;
+    }
     $n = normalizeSuffixName($n);
     return $n;
 }

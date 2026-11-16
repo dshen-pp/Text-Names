@@ -100,4 +100,51 @@ is(normalizeAuthorSourceValue("Cp, J."), "Cp, J.");
 # Without a postnominal a title stays: "Fr." is also an abbreviated given name ("Fr. Nietzsche").
 is(parsed("Fr. John Smith"), "Smith | Fr. John");
 
+# Brother, Father, Fr. or Rev. before initials goes only when a name is left: in "Rev. J. A. Smith" the initials
+# are the person's own, and a lone "Smith" makes xPapers drop the record as Defective. The name then stays as
+# written, the form already stored for these authors. ("Sister M." before a name in religion still goes.)
+is(normalizeAuthorSourceValue("Rev. J. A. Smith"), "Rev. J. A. Smith");
+is(normalizeAuthorSourceValue("Smith, Rev. J. A."), "Smith, Rev. J. A.");
+is(normalizeAuthorSourceValue("Father J. Smith"), "Father J. Smith");
+is(normalizeAuthorSourceValue("Robert, Brother S."), "Robert, Brother S.");
+# "Fr W. Foerster" is Friedrich Wilhelm Foerster.
+is(normalizeAuthorSourceValue("Foerster, Fr W."), "Foerster, Fr W.");
+is(normalizeAuthorSourceValue("Fr W. Foerster"), "Fr W. Foerster");
+# With an order postnominal the title alone goes and the initials stay.
+is(normalizeAuthorSourceValue("Fr. J. Murphy, S.J."), "J. Murphy");
+# Titles still go when a name is left.
+is(normalizeAuthorSourceValue("Rev. J. A. Smith Jones"), "Smith Jones");
+is(normalizeAuthorSourceValue("Sister M. Cleophas Smith, R.S.M."), "Cleophas Smith");
+is(normalizeAuthorSourceValue("Sr Albert Marie Surmanski, O. P."), "Albert Marie Surmanski");
+
+# Roman numeral suffixes run from II to IX; "Vi", "Ix" and a lone V or X are name parts or initials.
+is(parsed("Nguyen Thi Vi"), "Vi | Nguyen Thi");
+is(cleanName("Nguyen Thi Vi"), "Vi, Nguyen Thi");
+is(cleanName("Tran Vi Anh"), "Anh, Tran Vi");
+is(cleanName("Vi Nguyen"), "Nguyen, Vi");
+is(cleanName("Li Ix"), "Ix, Li");
+# Stored names carry suffixes title-cased by cleanName ("Soles Iii, Donald E."); those still read as suffixes.
+is(parsed("Donald E. Soles Iii"), "Soles III | Donald E.");
+is(cleanName("Soles Iii, Donald E."), "Soles III, Donald E.");
+is(parsed("John Henry Ring Iv"), "Ring IV | John Henry");
+is(parsed("Joao Barros Ii"), "Barros II | Joao");
+is(cleanName("Smith VI, John"), "Smith VI, John");
+is_deeply([parseNames("Smith, John, Doe, V")], ["Smith, John", "Doe, V."]);
+is_deeply([parseNames("Kim, J, Lee, X")], ["Kim, J.", "Lee, X."]);
+is(parsed("John M. Doe II"), "Doe II | John M.");
+is(parsed("Frederick H. Gautschi, III"), "Gautschi III | Frederick H.");
+is(parsed("Pope John Paul II"), "Paul II | Pope John");
+is(parsed("Smith JR, John"), "Smith Jr | John");
+is(parsed("John Smith jr."), "Smith Jr | John");
+
+# Before a name suffix, postnominal letters are the person's initials.
+is(parsed("Smith, S. J., Jr."), "Smith Jr | S. J.");
+is(parsed("Smith, Jr., S. J."), "Smith Jr | S. J.");
+is(parsed("Harrison, O. P., III"), "Harrison III | O. P.");
+is_deeply([parseName2("Smith, S. J., Jr.")], ["S.", "J.", "Smith", "Jr"]);
+is(normalizeAuthorSourceValue("Smith, S. J., Jr."), "Smith Jr, S. J.");
+is(normalizeAuthorSourceValue("Smith, Jr., S. J."), "Smith Jr, S. J.");
+is(normalizeAuthorSourceValue("Harrison, O. P., III"), "Harrison III, O. P.");
+is(normalizeAuthorSourceValue("Smith, John, Jr., S.J."), "Smith Jr, John");
+
 done_testing;
